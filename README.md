@@ -30,32 +30,40 @@ Please make sure that you have a DNS-NS record that points to the system that is
 
 Example usage:
 ```bash
-$ python3 dnsrebinder.py --domain rebind.mydomain.eu. --rebind 127.0.0.1 --ip 8.8.8.8 --counter 2
+$ python3 dnsrebinder.py --domain rebind.mydomain.eu. --rebind 127.0.0.1 --ip 8.8.8.8 --counter 1 --restart-after 1
 ...
 ```
 
-This starts a DNS server on port 53 listening on UDP and TCP. The first two(--counter 2) requests will be answered with 8.8.8.8. Every request after that will be answered with the rebind address 127.0.0.1 (--rebind 127.0.0.1).
+This starts a DNS server on port 53 listening on UDP and TCP. The first one(--counter 1) requests will be answered with 8.8.8.8. The one (--restart-after 1) request following right after that will be answered with the rebind address 127.0.0.1 (--rebind 127.0.0.1) and then it will restart.
+
+From the victim perspective it looks like : `legitimate` - `rebinded` - `legitimate` - `rebinded`, and so on...
+
 
 Options overview:
 ```bash
 $ python3 dnsrebinder.py -h
-usage: dnsrebinder.py [-h] [--port PORT] [--tcp] [--udp] [--domain DOMAIN]
-                     [--ttl TTL] [--ip IP] [--rebind REBIND]
-                     [--counter COUNTER]
+usage: dnsrebinder.py [-h] [--port PORT] [--tcp] [--udp]
+                      --domain DOMAIN [--ttl TTL] [--bind BIND]
+                      [--ip IP] [--rebind REBIND] [--counter COUNTER]
+                      [--restart-after RESTART_AFTER]
 
 Start a DNS implemented in Python. Usually DNSs use UDP on port 53.
 
-optional arguments:
-  -h, --help         show this help message and exit
-  --port PORT        The port to listen on.
-  --tcp              Listen to TCP connections.
-  --udp              Listen to UDP datagrams.
-  --domain DOMAIN    The domain to listen for
-  --ttl TTL          TTL value of DNS responses
-  --bind             IP Adress for server to listen on
-  --ip IP            IP Adress used to respond
-  --rebind REBIND    IP address for rebind
-  --counter COUNTER  Number of requests before rebinding
+options:
+  -h, --help            show this help message and exit
+  --port PORT           The port to listen on.
+  --tcp                 Listen to TCP connections.
+  --udp                 Listen to UDP datagrams.
+  --domain DOMAIN       The domain to listen for
+  --ttl TTL             TTL value of DNS responses
+  --bind BIND           IP Adress for server to listen on
+  --ip IP               IP Adress used to respond
+  --rebind REBIND       IP address for rebind
+  --counter COUNTER     Number of requests before rebinding
+  --restart-after RESTART_AFTER
+                        Number of rebind responses to send before
+                        restarting from the legitimate address (0 =
+                        never restart, keep rebinding forever)
 ```
 
 ## Contributing
@@ -66,6 +74,5 @@ Feel free to contribute.
 * **Timo Müller** - *Original script* - [mtimo44](https://twitter.com/mtimo44)
 * **Hans-Martin Münch** - *Re-Write with dnslib* - [h0ng10](https://twitter.com/h0ng10)
 * **Karsten Zeides** - *Command line options, cleanup* [zeides](https://github.com/zeides)
-
-See also the list of [contributors](https://github.com/mogwailabs/DNSrebinder/graphs/contributors) who participated in this project.
-
+* **gbrls** - *Output cleanup* [gbrls](https://github.com/gbrls)
+* **Neoreo** - *Command line options* [Neoreo](https://github.com/Ne0re0)
