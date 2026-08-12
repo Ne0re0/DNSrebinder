@@ -46,7 +46,7 @@ class DomainName(str):
 # }
 
 
-def dns_response(data, domain, ip, rebind, ttl, counterMax, hostCounter):
+def dns_response(data, domain, ip, rebind, ttl, counterMax, restartAfter, hostCounter):
     request = DNSRecord.parse(data)
 
     # print(request)
@@ -65,18 +65,20 @@ def dns_response(data, domain, ip, rebind, ttl, counterMax, hostCounter):
         rqt = "A"
         if qt in ['*', rqt]:
             print("Got a request for " + str(qname) + " Type: " + str(qt))
-            if qn in hostCounter:
-                if hostCounter[qn] < counterMax:
-                    reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(ip)))
-                else:
-                    reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(rebind)))
 
-                hostCounter[qn] = hostCounter[qn] + 1 
-                print("------------------------ Counter for host ", qn, " ", hostCounter[qn])
-            else:
+            count = hostCounter.get(qn, 0)
+            if count < counterMax:
                 reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(ip)))
-                hostCounter[qn] = 1
-                print("------------------------ Counter for host ", qn, " ", hostCounter[qn])
+            else:
+                reply.add_answer(RR(rname=qname, rtype=getattr(QTYPE, rqt), rclass=1, ttl=ttl, rdata=A(rebind)))
+
+            count = count + 1
+            # After restartAfter rebind responses, restart the cycle from the
+            # legitimate address (restartAfter <= 0 keeps rebinding forever).
+            if restartAfter > 0 and count >= counterMax + restartAfter:
+                count = 0
+            hostCounter[qn] = count
+            print("------------------------ Counter for host ", qn, " ", hostCounter[qn])
 
 #        for name, rrs in records.items():
 #            if name == qn:
@@ -113,7 +115,7 @@ class BaseRequestHandler(socketserver.BaseRequestHandler):
         try:
             data = self.get_data()
         #   print(len(data), data)  # repr(data).replace('\\x', '')[1:-1]
-            self.send_data(dns_response(data, self.server.domain, self.server.ip, self.server.rebind, self.server.ttl, self.server.counterMax, self.server.hostCounter))
+            self.send_data(dns_response(data, self.server.domain, self.server.ip, self.server.rebind, self.server.ttl, self.server.counterMax, self.server.restartAfter, self.server.hostCounter))
         except Exception:
             traceback.print_exc(file=sys.stderr)
 
@@ -154,7 +156,8 @@ def main():
     parser.add_argument('--bind', default='', type=str, help='IP Adress for server to listen on')
     parser.add_argument('--ip', default='8.8.8.8', help='IP Adress used to respond')
     parser.add_argument('--rebind', default='127.0.0.1', help='IP address for rebind')
-    parser.add_argument('--counter', default=2, type=int, help='Number of requests before rebinding'), 
+    parser.add_argument('--counter', default=2, type=int, help='Number of requests before rebinding'),
+    parser.add_argument('--restart-after', default=0, type=int, help='Number of rebind responses to send before restarting from the legitimate address (0 = never restart, keep rebinding forever)')
 
     args = parser.parse_args()
     if not (args.udp or args.tcp): parser.error("Please select at least one of --udp or --tcp.")
@@ -172,6 +175,7 @@ def main():
         s.rebind = args.rebind
         s.ttl = args.ttl
         s.counterMax = args.counter
+        s.restartAfter = args.restart_after
         s.hostCounter = {}
         thread = threading.Thread(target=s.serve_forever)  # that thread will start one more thread for each request
         thread.daemon = True  # exit the server thread when the main thread terminates
